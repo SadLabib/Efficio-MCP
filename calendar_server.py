@@ -4,6 +4,7 @@ from mcp.server.fastmcp import FastMCP
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
+from dateutil import parser, tz
 
 load_dotenv()
 GOOGLE_CREDENTIALS = os.getenv("GOOGLE_API_CREDENTIALS_PATH")
@@ -47,6 +48,8 @@ def list_events_for_day(date: str) -> str:
             orderBy="startTime"
         ).execute()
         events = events_result.get('items', [])
+        print(events)
+
         if not events:
             return f"No events found on {date}."
         lines = [f"Events on {date}:"]
@@ -60,21 +63,25 @@ def list_events_for_day(date: str) -> str:
 
 @mcp.tool()
 def is_free_at(datetime_str: str) -> bool:
-    """
-    Check if the user is free at the given datetime (ISO format).
-    Returns True if no event overlaps that time.
-    """
+    print(f"[DEBUG] is_free_at called with date_time: {datetime_str}")
     try:
-        dt = datetime.datetime.fromisoformat(datetime_str)
+        print(f"Input: {datetime_str}")
+        dt = parser.parse(datetime_str)
+        print(f"Parsed: {dt}, tzinfo: {dt.tzinfo}")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=tz.UTC)
+        else:
+            dt = dt.astimezone(tz.UTC)
     except Exception as e:
-        return f"Invalid datetime format. Use ISO format. Error: {e}"
+        print(f"Parse error: {e}")
+        return False
 
-    # Check for any event covering that time
+    print(dt)
     day_start = dt.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + datetime.timedelta(days=1)
-    time_min = day_start.isoformat() + 'Z'
-    time_max = day_end.isoformat() + 'Z'
-
+    time_min = day_start.isoformat()
+    time_max = day_end.isoformat()
+    print("Inside")
     try:
         events_result = service.events().list(
             calendarId=CALENDAR_ID,
@@ -83,16 +90,20 @@ def is_free_at(datetime_str: str) -> bool:
             singleEvents=True,
             orderBy="startTime"
         ).execute()
+
+        print(events_result)
         for ev in events_result.get('items', []):
-            ev_start = ev['start'].get('dateTime', ev['start'].get('date'))
-            ev_end = ev['end'].get('dateTime', ev['end'].get('date'))
-            start_dt = datetime.datetime.fromisoformat(ev_start)
-            end_dt = datetime.datetime.fromisoformat(ev_end)
-            if start_dt <= dt < end_dt:
+            ev_start = parser.parse(ev['start'].get('dateTime', ev['start'].get('date')))
+            ev_end = parser.parse(ev['end'].get('dateTime', ev['end'].get('date')))
+            ev_start = ev_start.astimezone(tz.UTC)
+            ev_end = ev_end.astimezone(tz.UTC)
+
+            print(dt, ev_start, ev_end)
+            if ev_start <= dt < ev_end:
                 return False
         return True
-    except Exception as e:
-        return f"Error checking events: {e}"
+    except Exception:
+        return False
 
 @mcp.tool()
 def find_next_free_slot(after_datetime: str, duration_minutes: int) -> str:
@@ -145,8 +156,8 @@ def schedule_event(summary: str, start_datetime: str, end_datetime: str) -> str:
     """
     try:
         event = {'summary': summary,
-                 'start': {'dateTime': start_datetime},
-                 'end': {'dateTime': end_datetime}}
+                 'start': {'dateTime': start_datetime, "timeZone": "Asia/Dhaka"},
+                 'end': {'dateTime': end_datetime, "timeZone": "Asia/Dhaka"}}
         created = service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
         link = created.get('htmlLink', '')
         return f"Event created: {link}"
@@ -183,4 +194,35 @@ def cancel_event(event_id: str) -> str:
         return f"Error canceling event: {e}"
 
 if __name__ == "__main__":
+    print('Server Started...')
     mcp.run(transport="stdio")
+    # Example test inputs
+    # print("Testing list_events_for_day:")
+    # print("Input: '2025-07-20'")
+    # print("Output:", list_events_for_day('2025-07-20'))
+    # print()
+
+    # print("Testing is_free_at:")
+    # print("Input: '2025-07-27T23:00:00'")
+    # print("Output:", is_free_at('2025-07-27T23:00:00'))
+    # print()
+
+    # print("Testing find_next_free_slot:")
+    # print("Input: after_datetime='2024-07-20T09:00:00', duration_minutes=30")
+    # print("Output:", find_next_free_slot('2024-07-20T09:00:00', 30))
+    # print()
+
+    # print("Testing schedule_event:")
+    # print("Input: summary='Test Event Tauhid', start_datetime='2025-07-21T15:00:00', end_datetime='2025-07-21T16:00:00'")
+    # print("Output:", schedule_event('Test Event', '2025-07-21T19:00:00', '2025-07-21T20:00:00'))
+    # print()
+
+    # print("Testing update_event:")
+    # print("Input: event_id='<EVENT_ID>', new_summary='Updated Event'")
+    # print("Output:", update_event('<EVENT_ID>', new_summary='Updated Event'))
+    # print()
+
+    # print("Testing cancel_event:")
+    # print("Input: event_id='<EVENT_ID>'")
+    # print("Output:", cancel_event('<EVENT_ID>'))
+    # print()
