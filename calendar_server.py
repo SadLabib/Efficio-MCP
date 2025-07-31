@@ -1,4 +1,5 @@
 import os
+import sys
 import datetime
 from mcp.server.fastmcp import FastMCP
 from google.oauth2 import service_account
@@ -22,6 +23,43 @@ if GOOGLE_CREDENTIALS:
         print(f"Error setting up Calendar API: {e}")
 
 mcp = FastMCP("Calendar")
+
+
+def find_events(date: str = None, summary: str = None):
+    """
+    Returns a list of events matching the given date (YYYY-MM-DD) and/or summary.
+    """
+    events = []
+    try:
+        if date:
+            date_obj = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+            start_of_day = datetime.datetime(date_obj.year, date_obj.month, date_obj.day, 0, 0, 0)
+            end_of_day = start_of_day + datetime.timedelta(days=1, seconds=-1)
+            time_min = start_of_day.isoformat() + 'Z'
+            time_max = end_of_day.isoformat() + 'Z'
+            events_result = service.events().list(
+                calendarId=CALENDAR_ID,
+                timeMin=time_min,
+                timeMax=time_max,
+                singleEvents=True,
+                orderBy="startTime"
+            ).execute()
+            events = events_result.get('items', [])
+        else:
+            # If no date, fetch next 10 events
+            events_result = service.events().list(
+                calendarId=CALENDAR_ID,
+                maxResults=10,
+                singleEvents=True,
+                orderBy="startTime"
+            ).execute()
+            events = events_result.get('items', [])
+        if summary:
+            events = [ev for ev in events if summary.lower() in ev.get('summary', '').lower()]
+        return events
+    except Exception as e:
+        print(f"Error finding events: {e}")
+        return []
 
 @mcp.tool()
 def list_events_for_day(date: str) -> str:
@@ -165,12 +203,22 @@ def schedule_event(summary: str, start_datetime: str, end_datetime: str) -> str:
         return f"Error creating event: {e}"
 
 @mcp.tool()
-def update_event(event_id: str, new_summary: str = None, new_start: str = None, new_end: str = None) -> str:
+def update_event_by_info(date: str, summary: str, new_summary: str = None, new_start: str = None, new_end: str = None) -> str:
     """
-    Update an event's summary or time by its ID.
+    Update an event by date and summary (user-friendly).
     """
+    events = find_events(date, summary)
+    if not events:
+        return "No matching event found."
+    if len(events) > 1:
+        # List events for user to clarify
+        lines = ["Multiple events found:"]
+        for idx, ev in enumerate(events, 1):
+            lines.append(f"{idx}. {ev.get('summary', 'No Title')} at {ev['start'].get('dateTime', ev['start'].get('date'))}")
+        return "\n".join(lines) + "\nPlease specify more details."
+    ev = events[0]
+    event_id = ev['id']
     try:
-        ev = service.events().get(calendarId=CALENDAR_ID, eventId=event_id).execute()
         if new_summary:
             ev['summary'] = new_summary
         if new_start:
@@ -183,10 +231,20 @@ def update_event(event_id: str, new_summary: str = None, new_start: str = None, 
         return f"Error updating event: {e}"
 
 @mcp.tool()
-def cancel_event(event_id: str) -> str:
+def cancel_event_by_info(date: str, summary: str) -> str:
     """
-    Delete (cancel) an event by its ID.
+    Cancel an event by date and summary (user-friendly).
     """
+    events = find_events(date, summary)
+    if not events:
+        return "No matching event found."
+    if len(events) > 1:
+        lines = ["Multiple events found:"]
+        for idx, ev in enumerate(events, 1):
+            lines.append(f"{idx}. {ev.get('summary', 'No Title')} at {ev['start'].get('dateTime', ev['start'].get('date'))}")
+        return "\n".join(lines) + "\nPlease specify more details."
+    ev = events[0]
+    event_id = ev['id']
     try:
         service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
         return "Event canceled."
@@ -195,7 +253,10 @@ def cancel_event(event_id: str) -> str:
 
 if __name__ == "__main__":
     print('Server Started...')
-    mcp.run(transport="stdio")
+    try:
+        mcp.run(transport="stdio")
+    except KeyboardInterrupt:
+        sys.stderr.write("\nServer stopped by user.\n")
     # Example test inputs
     # print("Testing list_events_for_day:")
     # print("Input: '2025-07-20'")
